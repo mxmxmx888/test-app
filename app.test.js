@@ -263,6 +263,29 @@ test("parseStatementCsv extracts outgoing transactions from common amount-based 
   ]);
 });
 
+test("parseStatementCsv handles revolut-style exports with completed dates and state filtering", () => {
+  const expenses = parseStatementCsv(
+    "Type,Product,Started Date,Completed Date,Description,Amount,Fee,Currency,State,Balance\nCard Payment,Current,2026-01-31 19:48:40,2026-02-01 07:30:04,Sainsbury's,-39.90,0.00,GBP,COMPLETED,1057.82\nTopup,Current,2026-02-04 17:59:03,2026-02-04 17:59:03,Payment from BYELKO S,200.00,0.00,GBP,COMPLETED,775.46\nCard Payment,Current,2026-02-25 16:51:50,,Bolt,-2.18,0.00,GBP,REVERTED,\nTransfer,Current,2026-02-04 22:53:54,2026-02-04 22:53:55,To Liucija Balciute,-30.00,0.00,GBP,COMPLETED,745.46"
+  );
+
+  assert.deepEqual(expenses, [
+    {
+      name: "Sainsbury's",
+      category: "Food",
+      amount: 39.9,
+      date: "2026-02-01 07:30:04",
+      source: "statement",
+    },
+    {
+      name: "To Liucija Balciute",
+      category: "Other",
+      amount: 30,
+      date: "2026-02-04 22:53:55",
+      source: "statement",
+    },
+  ]);
+});
+
 test("parseStatementCsv extracts debit-column statements", () => {
   const expenses = parseStatementCsv(
     "Posted Date,Details,Debit,Credit\n2026-02-03,Netflix,10.99,\n2026-02-04,Savings pot,,200"
@@ -452,7 +475,9 @@ test("ledger sorts expenses by amount and over-budget insight is shown", () => {
   });
 
   assert.equal(app.state.expenses[0].name, "Snacks");
-  assert.ok(nodes.expenseList.innerHTML.indexOf("Rent") < nodes.expenseList.innerHTML.indexOf("Snacks"));
+  assert.match(nodes.expenseList.innerHTML, /Housing/);
+  assert.match(nodes.expenseList.innerHTML, /Food/);
+  assert.ok(nodes.expenseList.innerHTML.includes("category-accordion"));
   assert.match(nodes.insightsList.innerHTML, /Your expenses exceed the budget/);
   assert.match(nodes.statsGrid.innerHTML, /You are over budget/);
 });
@@ -549,5 +574,5 @@ test("styles.css keeps animation and responsive layout rules", () => {
 
   assert.match(css, /@media \(max-width: 920px\)/);
   assert.match(css, /@media \(max-width: 640px\)/);
-  assert.match(css, /grid-template-columns: repeat\(12, minmax\(0, 1fr\)\)/);
+  assert.match(css, /grid-template-columns: repeat\(2, minmax\(0, 1fr\)\)/);
 });

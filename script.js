@@ -101,10 +101,13 @@ function parseStatementRows(rows) {
   const headers = rows[0].map(normalizeHeader);
   const indexes = {
     date: findColumnIndex(headers, ["date", "transaction date", "posted date", "booking date"]),
+    startedDate: findColumnIndex(headers, ["started date", "start date", "created date"]),
+    completedDate: findColumnIndex(headers, ["completed date", "completion date", "settled date"]),
     description: findColumnIndex(headers, ["description", "details", "payee", "transaction", "merchant", "narrative", "memo"]),
     reference: findColumnIndex(headers, ["reference"]),
     name: findColumnIndex(headers, ["name"]),
     type: findColumnIndex(headers, ["type", "transaction type", "dr cr"]),
+    status: findColumnIndex(headers, ["state", "status"]),
     debit: findColumnIndex(headers, ["debit", "money out"]),
     withdrawal: findColumnIndex(headers, ["withdrawal", "outflow"]),
     amount: findColumnIndex(headers, ["amount", "value"]),
@@ -156,8 +159,17 @@ function buildStatementExpense(row, indexes, headers) {
     row[indexes.reference] ||
     row[indexes.name] ||
     "Imported transaction";
-  const date = row[indexes.date] || "";
+  const date =
+    row[indexes.completedDate] ||
+    row[indexes.date] ||
+    row[indexes.startedDate] ||
+    "";
   const type = normalizeHeader(row[indexes.type] || "");
+  const status = normalizeHeader(row[indexes.status] || "");
+
+  if (status && !["completed", "settled"].includes(status)) {
+    return null;
+  }
 
   let amount = NaN;
 
@@ -590,21 +602,58 @@ function renderLedger(state, totals, elements) {
     return;
   }
 
-  elements.expenseList.innerHTML = state.expenses
-    .slice()
-    .sort((left, right) => right.amount - left.amount)
-    .map(
-      (expense) => `
-        <article class="expense-card">
-          <div class="expense-header">
-            <h3 class="expense-name">${expense.name}</h3>
-            <strong class="expense-amount">${currency.format(expense.amount)}</strong>
+  const groupedExpenses = state.expenses.reduce((groups, expense) => {
+    if (!groups[expense.category]) {
+      groups[expense.category] = [];
+    }
+
+    groups[expense.category].push(expense);
+    return groups;
+  }, {});
+
+  const groupedMarkup = Object.entries(groupedExpenses)
+    .sort((left, right) => {
+      const leftTotal = left[1].reduce((sum, expense) => sum + expense.amount, 0);
+      const rightTotal = right[1].reduce((sum, expense) => sum + expense.amount, 0);
+      return rightTotal - leftTotal;
+    })
+    .map(([category, expenses], index) => {
+      const categoryTotal = expenses.reduce((sum, expense) => sum + expense.amount, 0);
+      const expenseCards = expenses
+        .slice()
+        .sort((left, right) => right.amount - left.amount)
+        .map(
+          (expense) => `
+            <article class="expense-card">
+              <div class="expense-header">
+                <h3 class="expense-name">${expense.name}</h3>
+                <strong class="expense-amount">${currency.format(expense.amount)}</strong>
+              </div>
+              <p class="expense-meta">${expense.date ? expense.date : "Manual entry"}${expense.source === "statement" ? " · imported" : ""}</p>
+            </article>
+          `
+        )
+        .join("");
+
+      return `
+        <details class="category-accordion"${index === 0 ? " open" : ""}>
+          <summary class="category-summary">
+            <div class="category-name-line">
+              <h3 class="category-name">${category}</h3>
+              <span class="category-count">${expenses.length} items</span>
+            </div>
+            <strong class="category-total">${currency.format(categoryTotal)}</strong>
+            <span class="category-chevron">▾</span>
+          </summary>
+          <div class="category-items">
+            ${expenseCards}
           </div>
-          <p class="expense-meta">${expense.category}${expense.date ? ` · ${expense.date}` : ""}</p>
-        </article>
-      `
-    )
+        </details>
+      `;
+    })
     .join("");
+
+  elements.expenseList.innerHTML = groupedMarkup;
 }
 
 function persistState(storage, state) {
