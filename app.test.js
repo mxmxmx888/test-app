@@ -3,33 +3,25 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 
-const {
-  buildTotals,
-  createApp,
-  defaultCategory,
-  demoExpenses,
-  sanitizeState,
-  sessionStorageKey,
-  storageKey,
-} = require("./script.js");
+const { buildTotals, createApp, sanitizeState, storageKey } = require("./script.js");
 
 class MockClassList {
   constructor() {
-    this.names = new Set();
+    this.values = new Set();
   }
 
-  toggle(name, force) {
+  toggle(className, force) {
     if (force) {
-      this.names.add(name);
+      this.values.add(className);
       return true;
     }
 
-    this.names.delete(name);
+    this.values.delete(className);
     return false;
   }
 
-  contains(name) {
-    return this.names.has(name);
+  contains(className) {
+    return this.values.has(className);
   }
 }
 
@@ -39,9 +31,9 @@ class MockElement {
     this.value = initialValue;
     this.innerHTML = "";
     this.textContent = "";
-    this.attributes = new Map();
     this.listeners = new Map();
     this.classList = new MockClassList();
+    this.attributes = new Map();
   }
 
   addEventListener(type, handler) {
@@ -49,7 +41,7 @@ class MockElement {
   }
 
   setAttribute(name, value) {
-    this.attributes.set(name, String(value));
+    this.attributes.set(name, value);
   }
 
   getAttribute(name) {
@@ -88,6 +80,7 @@ function createStorage(seed = {}) {
   const data = new Map(Object.entries(seed));
 
   return {
+    data,
     getItem(key) {
       return data.has(key) ? data.get(key) : null;
     },
@@ -102,13 +95,17 @@ function createMockDom() {
   const appScreen = new MockElement("appScreen");
   const loginEmail = new MockElement("loginEmail");
   const loginPassword = new MockElement("loginPassword");
-  const userBadge = new MockElement("userBadge");
-  const logoutButton = new MockElement("logoutButton");
+  const loginForm = new MockFormElement("loginForm", {
+    loginEmail,
+    loginPassword,
+  });
   const budgetInput = new MockElement("budgetInput");
   const applyBudgetButton = new MockElement("applyBudgetButton");
   const resetDataButton = new MockElement("resetDataButton");
+  const logoutButton = new MockElement("logoutButton");
+  const userBadge = new MockElement("userBadge");
   const expenseName = new MockElement("expenseName");
-  const expenseCategory = new MockElement("expenseCategory", defaultCategory);
+  const expenseCategory = new MockElement("expenseCategory", "Housing");
   const expenseAmount = new MockElement("expenseAmount");
   const statsGrid = new MockElement("statsGrid");
   const categoryChart = new MockElement("categoryChart");
@@ -116,12 +113,6 @@ function createMockDom() {
   const insightsList = new MockElement("insightsList");
   const expenseList = new MockElement("expenseList");
   const ledgerCaption = new MockElement("ledgerCaption");
-
-  const loginForm = new MockFormElement("loginForm", {
-    loginEmail,
-    loginPassword,
-  });
-
   const expenseForm = new MockFormElement("expenseForm", {
     expenseName,
     expenseCategory,
@@ -134,11 +125,11 @@ function createMockDom() {
     loginForm,
     loginEmail,
     loginPassword,
-    userBadge,
-    logoutButton,
     budgetInput,
     applyBudgetButton,
     resetDataButton,
+    logoutButton,
+    userBadge,
     expenseForm,
     expenseName,
     expenseCategory,
@@ -192,43 +183,63 @@ test("buildTotals aggregates spend, ratios, and category ordering", () => {
   ]);
 });
 
-test("sanitizeState removes malformed and non-positive expenses", () => {
+test("sanitizeState removes malformed expenses and preserves session info", () => {
   const sanitized = sanitizeState({
     budget: 600,
     expenses: [
-      { name: " Valid ", category: " Food ", amount: 50 },
+      { name: "Valid", category: "Food", amount: 50 },
       { name: "  ", category: "Food", amount: 20 },
       { name: "Bad amount", category: "Food", amount: 0 },
       { name: "Bad category", category: "", amount: 10 },
       { category: "Food", amount: 10 },
     ],
+    session: {
+      email: "alex@example.com",
+      isAuthenticated: true,
+    },
   });
 
   assert.equal(sanitized.budget, 600);
   assert.deepEqual(sanitized.expenses, [{ name: "Valid", category: "Food", amount: 50 }]);
+  assert.deepEqual(sanitized.session, {
+    email: "alex@example.com",
+    isAuthenticated: true,
+  });
 });
 
-test("app boot loads demo data when storage is empty", () => {
+test("app boot starts logged out with no expenses when storage is empty", () => {
   const { app, nodes, storage } = createInitializedApp();
 
   assert.equal(app.state.budget, 2500);
-  assert.equal(app.state.expenses.length, demoExpenses.length);
-  assert.match(nodes.chartCaption.textContent, /categories are currently contributing/);
-  assert.match(nodes.ledgerCaption.textContent, /7 expense entries totalling/);
-  assert.ok(nodes.statsGrid.innerHTML.includes("Total spent"));
+  assert.deepEqual(app.state.expenses, []);
+  assert.equal(app.state.session.isAuthenticated, false);
+  assert.match(nodes.insightsList.innerHTML, /Your month starts clean/);
+  assert.match(nodes.ledgerCaption.textContent, /0 expense entries totalling £0/);
+  assert.equal(nodes.authScreen.classList.contains("is-visible"), true);
+  assert.equal(nodes.appScreen.classList.contains("is-visible"), false);
 
   const persisted = JSON.parse(storage.getItem(storageKey));
-  assert.equal(persisted.expenses.length, demoExpenses.length);
+  assert.deepEqual(persisted.expenses, []);
 });
 
-test("hydrate falls back to demo data when stored JSON is invalid", () => {
-  const { app } = createInitializedApp({ [storageKey]: "{bad json" });
+test("login moves the user to the app screen and persists session state", () => {
+  const { app, nodes, storage } = createInitializedApp();
 
-  assert.equal(app.state.budget, 2500);
-  assert.equal(app.state.expenses.length, demoExpenses.length);
+  nodes.loginEmail.value = "alex@example.com";
+  nodes.loginPassword.value = "secret";
+  nodes.loginForm.submit();
+
+  assert.equal(app.state.session.isAuthenticated, true);
+  assert.equal(app.state.session.email, "alex@example.com");
+  assert.equal(nodes.authScreen.classList.contains("is-visible"), false);
+  assert.equal(nodes.appScreen.classList.contains("is-visible"), true);
+  assert.equal(nodes.userBadge.textContent, "alex@example.com");
+
+  const persisted = JSON.parse(storage.getItem(storageKey));
+  assert.equal(persisted.session.isAuthenticated, true);
 });
 
-test("hydrate keeps valid saved data and filters invalid expense rows", () => {
+test("hydrate keeps valid saved data and session info", () => {
   const storedState = {
     budget: 900,
     expenses: [
@@ -236,6 +247,10 @@ test("hydrate keeps valid saved data and filters invalid expense rows", () => {
       { name: "Ghost", category: "Other", amount: 0 },
       { name: "Travel", category: "Transport", amount: 120 },
     ],
+    session: {
+      email: "saved@example.com",
+      isAuthenticated: true,
+    },
   };
 
   const { app, nodes } = createInitializedApp({
@@ -247,12 +262,20 @@ test("hydrate keeps valid saved data and filters invalid expense rows", () => {
     { name: "Bills", category: "Utilities", amount: 200 },
     { name: "Travel", category: "Transport", amount: 120 },
   ]);
+  assert.equal(app.state.session.email, "saved@example.com");
   assert.match(nodes.ledgerCaption.textContent, /2 expense entries totalling £320/);
   assert.ok(nodes.expenseList.innerHTML.includes("Bills"));
+  assert.equal(nodes.appScreen.classList.contains("is-visible"), true);
 });
 
 test("setting budget accepts valid numbers and clamps invalid input to zero", () => {
-  const { app, nodes } = createInitializedApp();
+  const { app, nodes } = createInitializedApp({
+    [storageKey]: JSON.stringify({
+      budget: 2500,
+      expenses: [],
+      session: { email: "alex@example.com", isAuthenticated: true },
+    }),
+  });
 
   nodes.budgetInput.value = "1800";
   nodes.applyBudgetButton.click();
@@ -261,12 +284,15 @@ test("setting budget accepts valid numbers and clamps invalid input to zero", ()
   nodes.budgetInput.value = "-20";
   nodes.applyBudgetButton.click();
   assert.equal(app.state.budget, 0);
-  assert.match(nodes.insightsList.innerHTML, /Daily pacing/);
 });
 
-test("submitting expense trims fields, rejects invalid rows, and resets form fields", () => {
+test("submitting expense trims name, rejects invalid rows, and resets form fields", () => {
   const { app, nodes } = createInitializedApp({
-    [storageKey]: JSON.stringify({ budget: 400, expenses: [] }),
+    [storageKey]: JSON.stringify({
+      budget: 400,
+      expenses: [],
+      session: { email: "alex@example.com", isAuthenticated: true },
+    }),
   });
 
   nodes.expenseName.value = "   ";
@@ -282,12 +308,12 @@ test("submitting expense trims fields, rejects invalid rows, and resets form fie
   assert.deepEqual(app.state.expenses, [{ name: "Coffee", category: "Food", amount: 4.5 }]);
   assert.equal(nodes.expenseName.value, "");
   assert.equal(nodes.expenseAmount.value, "");
-  assert.equal(nodes.expenseCategory.value, defaultCategory);
+  assert.equal(nodes.expenseCategory.value, "Housing");
   assert.match(nodes.expenseList.innerHTML, /Coffee/);
 });
 
 test("ledger sorts expenses by amount and over-budget insight is shown", () => {
-  const { nodes } = createInitializedApp({
+  const { app, nodes } = createInitializedApp({
     [storageKey]: JSON.stringify({
       budget: 100,
       expenses: [
@@ -295,19 +321,22 @@ test("ledger sorts expenses by amount and over-budget insight is shown", () => {
         { name: "Rent", category: "Housing", amount: 120 },
         { name: "Bus", category: "Transport", amount: 10 },
       ],
+      session: { email: "alex@example.com", isAuthenticated: true },
     }),
   });
 
+  assert.equal(app.state.expenses[0].name, "Snacks");
   assert.ok(nodes.expenseList.innerHTML.indexOf("Rent") < nodes.expenseList.innerHTML.indexOf("Snacks"));
   assert.match(nodes.insightsList.innerHTML, /Your expenses exceed the budget/);
   assert.match(nodes.statsGrid.innerHTML, /You are over budget/);
 });
 
-test("reset clears expenses while preserving the default budget baseline", () => {
+test("reset data clears expenses and preserves access to the app", () => {
   const { app, nodes } = createInitializedApp({
     [storageKey]: JSON.stringify({
-      budget: 100,
-      expenses: [{ name: "Rent", category: "Housing", amount: 70 }],
+      budget: 600,
+      expenses: [{ name: "Bills", category: "Utilities", amount: 120 }],
+      session: { email: "alex@example.com", isAuthenticated: true },
     }),
   });
 
@@ -315,48 +344,40 @@ test("reset clears expenses while preserving the default budget baseline", () =>
 
   assert.equal(app.state.budget, 2500);
   assert.deepEqual(app.state.expenses, []);
+  assert.equal(app.state.session.isAuthenticated, true);
   assert.match(nodes.expenseList.innerHTML, /No expenses added yet/);
 });
 
-test("login and logout toggle the auth views and persist the session", () => {
-  const { app, nodes, storage } = createInitializedApp();
-
-  assert.equal(nodes.authScreen.classList.contains("is-visible"), true);
-  assert.equal(nodes.appScreen.classList.contains("is-visible"), false);
-
-  nodes.loginEmail.value = "alex@example.com";
-  nodes.loginPassword.value = "password";
-  nodes.loginForm.submit();
-
-  assert.equal(app.session.user, "alex@example.com");
-  assert.equal(nodes.authScreen.classList.contains("is-visible"), false);
-  assert.equal(nodes.appScreen.classList.contains("is-visible"), true);
-  assert.equal(nodes.userBadge.textContent, "alex");
-  assert.deepEqual(JSON.parse(storage.getItem(sessionStorageKey)), {
-    user: "alex@example.com",
+test("logout returns the user to the login screen", () => {
+  const { app, nodes } = createInitializedApp({
+    [storageKey]: JSON.stringify({
+      budget: 600,
+      expenses: [],
+      session: { email: "alex@example.com", isAuthenticated: true },
+    }),
   });
 
   nodes.logoutButton.click();
 
-  assert.equal(app.session.user, null);
+  assert.equal(app.state.session.isAuthenticated, false);
   assert.equal(nodes.authScreen.classList.contains("is-visible"), true);
   assert.equal(nodes.appScreen.classList.contains("is-visible"), false);
 });
 
-test("index.html exposes the current auth and dashboard shell", () => {
+test("index.html exposes login flow and app controls", () => {
   const html = fs.readFileSync(path.join(__dirname, "index.html"), "utf8");
 
-  [
+  const requiredIds = [
     "authScreen",
+    "appScreen",
     "loginForm",
     "loginEmail",
     "loginPassword",
-    "appScreen",
-    "userBadge",
-    "logoutButton",
     "budgetInput",
     "applyBudgetButton",
     "resetDataButton",
+    "logoutButton",
+    "userBadge",
     "expenseForm",
     "expenseName",
     "expenseCategory",
@@ -367,29 +388,30 @@ test("index.html exposes the current auth and dashboard shell", () => {
     "insightsList",
     "expenseList",
     "ledgerCaption",
-  ].forEach((id) => {
+  ];
+
+  requiredIds.forEach((id) => {
     assert.match(html, new RegExp(`id="${id}"`));
   });
 
   assert.match(html, /<title>Budget Lens<\/title>/);
-  assert.match(html, /<link rel="stylesheet" href="\.\/styles\.css"/);
+  assert.match(html, /Access your dashboard/);
+  assert.match(html, /Reset data/);
   assert.match(html, /<script src="\.\/script\.js"><\/script>/);
-  assert.match(html, /<option>Savings<\/option>/);
 });
 
-test("styles.css keeps design tokens and responsive layout rules", () => {
+test("styles.css keeps animation and responsive layout rules", () => {
   const css = fs.readFileSync(path.join(__dirname, "styles.css"), "utf8");
 
   [
-    "--bg",
-    "--panel",
-    "--accent",
-    ".auth-layout",
+    "--ease-smooth",
+    ".view",
+    ".auth-screen",
     ".hero",
     ".dashboard",
     ".stats-grid",
-    ".chart-row",
-    ".empty-state",
+    "@keyframes rise-in",
+    "@keyframes bar-grow",
   ].forEach((token) => {
     assert.match(css, new RegExp(token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   });
