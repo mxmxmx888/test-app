@@ -93,6 +93,29 @@ function parseCsv(text) {
   return lines.map((line) => parseCsvLine(line, delimiter));
 }
 
+function parseStatementRows(rows) {
+  if (rows.length < 2) {
+    return [];
+  }
+
+  const headers = rows[0].map(normalizeHeader);
+  const indexes = {
+    date: findColumnIndex(headers, ["date", "transaction date", "posted date", "booking date"]),
+    description: findColumnIndex(headers, ["description", "details", "payee", "transaction", "merchant", "narrative", "memo"]),
+    reference: findColumnIndex(headers, ["reference"]),
+    name: findColumnIndex(headers, ["name"]),
+    type: findColumnIndex(headers, ["type", "transaction type", "dr cr"]),
+    debit: findColumnIndex(headers, ["debit", "money out"]),
+    withdrawal: findColumnIndex(headers, ["withdrawal", "outflow"]),
+    amount: findColumnIndex(headers, ["amount", "value"]),
+  };
+
+  return rows
+    .slice(1)
+    .map((row) => buildStatementExpense(row, indexes, headers))
+    .filter(Boolean);
+}
+
 function findColumnIndex(headers, aliases) {
   return headers.findIndex((header) =>
     aliases.some((alias) => header === alias || header.includes(alias))
@@ -173,28 +196,184 @@ function buildStatementExpense(row, indexes, headers) {
 }
 
 function parseStatementCsv(text) {
-  const rows = parseCsv(text);
+  return parseStatementRows(parseCsv(text));
+}
 
-  if (rows.length < 2) {
-    return [];
+function decodeXmlEntities(value) {
+  return String(value || "")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'");
+}
+
+function excelSerialToDate(serial) {
+  const numeric = Number(serial);
+  if (!Number.isFinite(numeric) || numeric < 1) {
+    return String(serial || "");
   }
 
-  const headers = rows[0].map(normalizeHeader);
-  const indexes = {
-    date: findColumnIndex(headers, ["date", "transaction date", "posted date", "booking date"]),
-    description: findColumnIndex(headers, ["description", "details", "payee", "transaction", "merchant", "narrative", "memo"]),
-    reference: findColumnIndex(headers, ["reference"]),
-    name: findColumnIndex(headers, ["name"]),
-    type: findColumnIndex(headers, ["type", "transaction type", "dr cr"]),
-    debit: findColumnIndex(headers, ["debit", "money out"]),
-    withdrawal: findColumnIndex(headers, ["withdrawal", "outflow"]),
-    amount: findColumnIndex(headers, ["amount", "value"]),
-  };
+  const epoch = Date.UTC(1899, 11, 30);
+  const date = new Date(epoch + numeric * 86400000);
+  return date.toISOString().slice(0, 10);
+}
 
-  return rows
-    .slice(1)
-    .map((row) => buildStatementExpense(row, indexes, headers))
-    .filter(Boolean);
+function parseSharedStringsXml(xml) {
+  return Array.from(String(xml || "").matchAll(/<si[\s\S]*?<\/si>/g)).map((match) => {
+    const parts = Array.from(match[0].matchAll(/<t[^>]*>([\s\S]*?)<\/t>/g)).map((entry) =>
+      decodeXmlEntities(entry[1])
+    );
+    return parts.join("");
+  });
+}
+
+function columnReferenceToIndex(reference) {
+  return reference
+    .split("")
+    .reduce((total, character) => total * 26 + character.charCodeAt(0) - 64, 0) - 1;
+}
+
+function extractCellValue(cellXml, sharedStrings) {
+  const typeMatch = cellXml.match(/\bt="([^"]+)"/);
+  const type = typeMatch ? typeMatch[1] : "";
+  const valueMatch = cellXml.match(/<v[^>]*>([\s\S]*?)<\/v>/);
+  const inlineMatch = cellXml.match(/<is[\s\S]*?<t[^>]*>([\s\S]*?)<\/t>[\s\S]*?<\/is>/);
+
+  if (type === "inlineStr" && inlineMatch) {
+    return decodeXmlEntities(inlineMatch[1]);
+  }
+
+  if (!valueMatch) {
+    return "";
+  }
+
+  const rawValue = decodeXmlEntities(valueMatch[1]);
+  if (type === "s") {
+    return sharedStrings[Number(rawValue)] || "";
+  }
+
+  return rawValue;
+}
+
+function parseWorksheetXml(sheetXml, sharedStrings) {
+  return Array.from(String(sheetXml || "").matchAll(/<row\b[\s\S]*?<\/row>/g)).map((rowMatch) => {
+    const row = [];
+
+    Array.from(rowMatch[0].matchAll(/<c\b([\s\S]*?)>([\s\S]*?)<\/c>/g)).forEach((cellMatch) => {
+      const referenceMatch = cellMatch[1].match(/\br="([A-Z]+)\d+"/);
+      if (!referenceMatch) {
+        return;
+      }
+
+      const index = columnReferenceToIndex(referenceMatch[1]);
+      row[index] = extractCellValue(cellMatch[0], sharedStrings);
+    });
+
+    return row.map((value) => (value == null ? "" : value));
+  });
+}
+
+function findWorksheetPath(workbookXml, workbookRelsXml) {
+  const sheetMatch = String(workbookXml || "").match(/<sheet\b[^>]*r:id="([^"]+)"/);
+  if (!sheetMatch) {
+    return "xl/worksheets/sheet1.xml";
+  }
+
+  const relationPattern = new RegExp(
+    `<Relationship[^>]*Id="${sheetMatch[1]}"[^>]*Target="([^"]+)"`,
+    "i"
+  );
+  const relationMatch = String(workbookRelsXml || "").match(relationPattern);
+  if (!relationMatch) {
+    return "xl/worksheets/sheet1.xml";
+  }
+
+  const target = relationMatch[1].replace(/^\.\//, "");
+  return target.startsWith("xl/") ? target : `xl/${target}`;
+}
+
+async function inflateZipEntry(compressionMethod, compressedData) {
+  if (compressionMethod === 0) {
+    return compressedData;
+  }
+
+  if (compressionMethod !== 8 || typeof DecompressionStream === "undefined") {
+    throw new Error("Unsupported workbook compression.");
+  }
+
+  const stream = new Blob([compressedData]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+
+async function unzipEntries(arrayBuffer) {
+  const data = new Uint8Array(arrayBuffer);
+  const decoder = new TextDecoder();
+  const entries = new Map();
+  let offset = 0;
+
+  while (offset + 4 <= data.length) {
+    const signature =
+      data[offset] |
+      (data[offset + 1] << 8) |
+      (data[offset + 2] << 16) |
+      (data[offset + 3] << 24);
+
+    if (signature !== 0x04034b50) {
+      break;
+    }
+
+    const compressionMethod = data[offset + 8] | (data[offset + 9] << 8);
+    const compressedSize =
+      data[offset + 18] |
+      (data[offset + 19] << 8) |
+      (data[offset + 20] << 16) |
+      (data[offset + 21] << 24);
+    const fileNameLength = data[offset + 26] | (data[offset + 27] << 8);
+    const extraFieldLength = data[offset + 28] | (data[offset + 29] << 8);
+    const fileName = decoder.decode(
+      data.slice(offset + 30, offset + 30 + fileNameLength)
+    );
+    const dataStart = offset + 30 + fileNameLength + extraFieldLength;
+    const compressedData = data.slice(dataStart, dataStart + compressedSize);
+    const fileData = await inflateZipEntry(compressionMethod, compressedData);
+
+    entries.set(fileName, decoder.decode(fileData));
+    offset = dataStart + compressedSize;
+  }
+
+  return entries;
+}
+
+function parseStatementXlsxParts(parts) {
+  const sharedStrings = parseSharedStringsXml(parts.get("xl/sharedStrings.xml") || "");
+  const workbookXml = parts.get("xl/workbook.xml") || "";
+  const workbookRelsXml = parts.get("xl/_rels/workbook.xml.rels") || "";
+  const worksheetPath = findWorksheetPath(workbookXml, workbookRelsXml);
+  const sheetXml = parts.get(worksheetPath) || parts.get("xl/worksheets/sheet1.xml") || "";
+
+  const worksheetRows = parseWorksheetXml(sheetXml, sharedStrings);
+  const headerRow = worksheetRows[0] || [];
+  const rows = worksheetRows.map((row, index) => {
+    if (index === 0) {
+      return row;
+    }
+
+    return row.map((value, cellIndex) => {
+      const header = normalizeHeader(headerRow[cellIndex] || "");
+      if (header.includes("date") && /^\d+(\.\d+)?$/.test(String(value || ""))) {
+        return excelSerialToDate(value);
+      }
+      return value;
+    });
+  });
+
+  return parseStatementRows(rows);
+}
+
+async function parseStatementXlsx(arrayBuffer) {
+  const parts = await unzipEntries(arrayBuffer);
+  return parseStatementXlsxParts(parts);
 }
 
 function buildTotals(state) {
@@ -587,18 +766,33 @@ function createApp(options = {}) {
     });
   }
 
+  async function readFileBuffer(file) {
+    if (typeof file.arrayBuffer === "function") {
+      return file.arrayBuffer();
+    }
+
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = () => reject(new Error("Could not read the selected file."));
+      reader.readAsArrayBuffer(file);
+    });
+  }
+
   async function importStatement(event) {
     event.preventDefault();
 
     const file = elements.statementFile?.files?.[0];
     if (!file) {
-      setStatementStatus("Choose a CSV statement file first.");
+      setStatementStatus("Choose a CSV or XLSX statement file first.");
       return;
     }
 
     try {
-      const text = await readFileText(file);
-      const importedExpenses = parseStatementCsv(text);
+      const isExcel = /\.xlsx$/i.test(file.name) || file.type.includes("spreadsheetml");
+      const importedExpenses = isExcel
+        ? await parseStatementXlsx(await readFileBuffer(file))
+        : parseStatementCsv(await readFileText(file));
 
       if (!importedExpenses.length) {
         setStatementStatus("No outgoing transactions were detected in that file.");
@@ -610,7 +804,7 @@ function createApp(options = {}) {
       setStatementStatus(`Imported ${importedExpenses.length} expenses from ${file.name}.`);
       render();
     } catch {
-      setStatementStatus("This statement could not be imported. Use a CSV export from your bank.");
+      setStatementStatus("This statement could not be imported. Use a CSV or XLSX export from your bank.");
     }
   }
 
@@ -670,12 +864,16 @@ if (typeof document !== "undefined" && typeof window !== "undefined") {
 if (typeof module !== "undefined") {
   module.exports = {
     buildTotals,
+    categorizeStatementExpense,
     createApp,
     createInitialState,
     currency,
     parseCsv,
     parseStatementCsv,
-    categorizeStatementExpense,
+    parseStatementRows,
+    parseStatementXlsxParts,
+    parseSharedStringsXml,
+    parseWorksheetXml,
     sanitizeState,
     storageKey,
   };

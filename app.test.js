@@ -5,10 +5,13 @@ const path = require("node:path");
 
 const {
   buildTotals,
-  createApp,
   categorizeStatementExpense,
+  createApp,
   parseCsv,
   parseStatementCsv,
+  parseStatementXlsxParts,
+  parseSharedStringsXml,
+  parseWorksheetXml,
   sanitizeState,
   storageKey,
 } = require("./script.js");
@@ -276,6 +279,52 @@ test("parseStatementCsv extracts debit-column statements", () => {
   ]);
 });
 
+test("parseSharedStringsXml and parseWorksheetXml extract spreadsheet rows", () => {
+  const sharedStrings = parseSharedStringsXml(
+    '<sst><si><t>Date</t></si><si><t>Description</t></si><si><t>Amount</t></si><si><t>TESCO STORES</t></si></sst>'
+  );
+  const rows = parseWorksheetXml(
+    '<worksheet><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v>1</v></c><c r="C1" t="s"><v>2</v></c></row><row r="2"><c r="A2"><v>45321</v></c><c r="B2" t="s"><v>3</v></c><c r="C2"><v>-12.34</v></c></row></sheetData></worksheet>',
+    sharedStrings
+  );
+
+  assert.deepEqual(rows, [
+    ["Date", "Description", "Amount"],
+    ["45321", "TESCO STORES", "-12.34"],
+  ]);
+});
+
+test("parseStatementXlsxParts extracts outgoing transactions from worksheet xml", () => {
+  const parts = new Map([
+    [
+      "xl/workbook.xml",
+      '<workbook><sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>',
+    ],
+    [
+      "xl/_rels/workbook.xml.rels",
+      '<Relationships><Relationship Id="rId1" Target="worksheets/sheet1.xml"/></Relationships>',
+    ],
+    [
+      "xl/sharedStrings.xml",
+      '<sst><si><t>Date</t></si><si><t>Description</t></si><si><t>Amount</t></si><si><t>TESCO STORES</t></si><si><t>SALARY</t></si></sst>',
+    ],
+    [
+      "xl/worksheets/sheet1.xml",
+      '<worksheet><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v>1</v></c><c r="C1" t="s"><v>2</v></c></row><row r="2"><c r="A2"><v>45321</v></c><c r="B2" t="s"><v>3</v></c><c r="C2"><v>-12.34</v></c></row><row r="3"><c r="A3"><v>45322</v></c><c r="B3" t="s"><v>4</v></c><c r="C3"><v>2500</v></c></row></sheetData></worksheet>',
+    ],
+  ]);
+
+  assert.deepEqual(parseStatementXlsxParts(parts), [
+    {
+      name: "TESCO STORES",
+      category: "Food",
+      amount: 12.34,
+      date: "2024-01-30",
+      source: "statement",
+    },
+  ]);
+});
+
 test("categorizeStatementExpense maps merchants to useful categories", () => {
   assert.equal(categorizeStatementExpense("TESCO STORES 123"), "Food");
   assert.equal(categorizeStatementExpense("UBER TRIP"), "Transport");
@@ -477,6 +526,7 @@ test("index.html exposes login flow and app controls", () => {
   assert.match(html, /<title>Budget Lens<\/title>/);
   assert.match(html, /Access your dashboard/);
   assert.match(html, /Reset data/);
+  assert.match(html, /application\/vnd\.openxmlformats-officedocument\.spreadsheetml\.sheet/);
   assert.match(html, /<script src="\.\/script\.js"><\/script>/);
 });
 

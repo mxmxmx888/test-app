@@ -135,12 +135,12 @@
             <form id="statementForm" class="expense-form">
               <label class="field">
                 <span>Statement file</span>
-                <input id="statementFile" type="file" accept=".csv,text/csv" required />
+                <input id="statementFile" type="file" accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required />
               </label>
-              <button type="submit" class="primary-button">Import statement CSV</button>
+              <button type="submit" class="primary-button">Import statement file</button>
             </form>
             <p class="budget-note">
-              Supports common bank CSV exports. Outgoing transactions are added as expenses automatically.
+              Supports common bank CSV and Excel (`.xlsx`) exports. Outgoing transactions are added as expenses automatically.
             </p>
             <p id="statementStatus" class="statement-status muted-text">No statement imported yet.</p>
           </section>

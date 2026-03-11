@@ -209,17 +209,17 @@ select {
 }
 
 .input-panel {
-  grid-column: span 4;
+  grid-column: span 6;
 }
 
 .import-panel {
-  grid-column: span 4;
+  grid-column: span 6;
 }
 
 .stats-grid {
-  grid-column: span 4;
+  grid-column: span 12;
   display: grid;
-  grid-template-columns: 1fr;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 20px;
 }
 
@@ -246,6 +246,10 @@ select {
 .statement-status {
   min-height: 24px;
   margin-top: 12px;
+}
+
+.import-panel .budget-note {
+  line-height: 1.5;
 }
 
 .expense-form {
@@ -337,6 +341,7 @@ select {
   background: linear-gradient(180deg, rgba(255, 250, 240, 0.96), rgba(249, 241, 227, 0.84));
   border: 1px solid var(--line);
   box-shadow: var(--shadow);
+  min-height: 174px;
   transition: transform 240ms var(--ease-smooth), box-shadow 240ms var(--ease-smooth);
 }
 
