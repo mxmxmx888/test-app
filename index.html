@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Budget Lens</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="page-shell">
+      <section id="authScreen" class="auth-screen view is-visible">
+        <div class="auth-backdrop"></div>
+        <div class="auth-layout">
+          <section class="auth-copy">
+            <p class="eyebrow">Budget Lens</p>
+            <h1>Log in and start planning your month with clarity.</h1>
+            <p class="hero-text">
+              Capture your budget, record expenses, and get immediate spending
+              signals without leaving the browser.
+            </p>
+            <div class="auth-points">
+              <div class="auth-point panel">
+                <span class="auth-point-number">01</span>
+                <p>Track category pressure and remaining budget in real time.</p>
+              </div>
+              <div class="auth-point panel">
+                <span class="auth-point-number">02</span>
+                <p>Get practical insights when your spending starts drifting.</p>
+              </div>
+            </div>
+          </section>
+
+          <section class="auth-card panel">
+            <div class="section-heading auth-heading">
+              <div>
+                <p class="eyebrow">Login</p>
+                <h2>Access your dashboard</h2>
+              </div>
+            </div>
+            <form id="loginForm" class="expense-form">
+              <label class="field">
+                <span>Email</span>
+                <input id="loginEmail" type="email" placeholder="alex@email.com" required />
+              </label>
+              <label class="field">
+                <span>Password</span>
+                <input id="loginPassword" type="password" placeholder="Enter password" required />
+              </label>
+              <button type="submit" class="primary-button">Login</button>
+            </form>
+            <p class="budget-note">This is a simple local login gate for entering the app.</p>
+          </section>
+        </div>
+      </section>
+
+      <section id="appScreen" class="app-screen view" aria-hidden="true">
+        <header class="hero">
+          <div class="hero-copy">
+            <p class="eyebrow">Monthly Budget Intelligence</p>
+            <h1>Track spending with context, not just totals.</h1>
+            <p class="hero-text">
+              Add your monthly budget and expenses to see burn rate, category
+              pressure, saving potential, and practical guidance.
+            </p>
+          </div>
+          <section class="budget-card panel">
+            <div class="budget-card-top">
+              <div class="session-meta">
+                <div>
+                  <p class="eyebrow">Session</p>
+                  <p id="userBadge" class="budget-note">Signed in</p>
+                </div>
+                <button id="logoutButton" class="secondary-button" type="button">Logout</button>
+              </div>
+              <label class="field">
+                <span>Monthly budget</span>
+                <input id="budgetInput" type="number" min="0" step="0.01" placeholder="2500" />
+              </label>
+            </div>
+            <div class="budget-actions">
+              <button id="applyBudgetButton" class="primary-button" type="button">Apply budget</button>
+              <button id="resetDataButton" class="secondary-button" type="button">Reset data</button>
+            </div>
+            <p class="budget-note">Your saved budget and expenses stay in this browser until you reset them.</p>
+          </section>
+        </header>
+
+        <main class="dashboard">
+          <section class="panel input-panel">
+            <div class="section-heading">
+              <div>
+                <p class="eyebrow">Expense Entry</p>
+                <h2>Add a monthly expense</h2>
+              </div>
+            </div>
+            <form id="expenseForm" class="expense-form">
+              <label class="field">
+                <span>Item name</span>
+                <input id="expenseName" type="text" maxlength="40" placeholder="Groceries" required />
+              </label>
+              <label class="field">
+                <span>Category</span>
+                <select id="expenseCategory">
+                  <option>Housing</option>
+                  <option>Food</option>
+                  <option>Transport</option>
+                  <option>Utilities</option>
+                  <option>Health</option>
+                  <option>Entertainment</option>
+                  <option>Savings</option>
+                  <option>Other</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Amount</span>
+                <input id="expenseAmount" type="number" min="0" step="0.01" placeholder="120" required />
+              </label>
+              <button type="submit" class="primary-button add-button">Add expense</button>
+            </form>
+          </section>
+
+          <section class="stats-grid" id="statsGrid"></section>
+
+          <section class="panel chart-panel">
+            <div class="section-heading">
+              <div>
+                <p class="eyebrow">Category Pressure</p>
+                <h2>Where your money goes</h2>
+              </div>
+              <p id="chartCaption" class="muted-text"></p>
+            </div>
+            <div id="categoryChart" class="category-chart"></div>
+          </section>
+
+          <section class="panel insights-panel">
+            <div class="section-heading">
+              <div>
+                <p class="eyebrow">Insights</p>
+                <h2>Useful signals from your spending</h2>
+              </div>
+            </div>
+            <div id="insightsList" class="insights-list"></div>
+          </section>
+
+          <section class="panel ledger-panel">
+            <div class="section-heading">
+              <div>
+                <p class="eyebrow">Ledger</p>
+                <h2>Expense list</h2>
+              </div>
+              <p id="ledgerCaption" class="muted-text"></p>
+            </div>
+            <div id="expenseList" class="expense-list"></div>
+          </section>
+        </main>
+      </section>
+    </div>
+
+    <script src="./script.js"></script>
+  </body>
+</html>
