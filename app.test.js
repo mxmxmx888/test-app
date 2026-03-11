@@ -3,7 +3,15 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 
-const { buildTotals, createApp, sanitizeState, storageKey } = require("./script.js");
+const {
+  buildTotals,
+  createApp,
+  categorizeStatementExpense,
+  parseCsv,
+  parseStatementCsv,
+  sanitizeState,
+  storageKey,
+} = require("./script.js");
 
 class MockClassList {
   constructor() {
@@ -102,6 +110,9 @@ function createMockDom() {
   const budgetInput = new MockElement("budgetInput");
   const applyBudgetButton = new MockElement("applyBudgetButton");
   const resetDataButton = new MockElement("resetDataButton");
+  const statementFile = new MockElement("statementFile");
+  statementFile.files = [];
+  const statementStatus = new MockElement("statementStatus");
   const logoutButton = new MockElement("logoutButton");
   const userBadge = new MockElement("userBadge");
   const expenseName = new MockElement("expenseName");
@@ -118,6 +129,9 @@ function createMockDom() {
     expenseCategory,
     expenseAmount,
   });
+  const statementForm = new MockFormElement("statementForm", {
+    statementFile,
+  });
 
   const nodes = {
     authScreen,
@@ -128,6 +142,9 @@ function createMockDom() {
     budgetInput,
     applyBudgetButton,
     resetDataButton,
+    statementForm,
+    statementFile,
+    statementStatus,
     logoutButton,
     userBadge,
     expenseForm,
@@ -200,11 +217,69 @@ test("sanitizeState removes malformed expenses and preserves session info", () =
   });
 
   assert.equal(sanitized.budget, 600);
-  assert.deepEqual(sanitized.expenses, [{ name: "Valid", category: "Food", amount: 50 }]);
+  assert.deepEqual(sanitized.expenses, [
+    { name: "Valid", category: "Food", amount: 50, date: "", source: "manual" },
+  ]);
   assert.deepEqual(sanitized.session, {
     email: "alex@example.com",
     isAuthenticated: true,
   });
+  assert.equal(sanitized.expenses[0].source, "manual");
+  assert.equal(sanitized.expenses[0].date, "");
+});
+
+test("parseCsv supports quoted values", () => {
+  const rows = parseCsv('Date,Description,Amount\n2026-02-03,"TESCO, SUPERSTORE",-42.10');
+
+  assert.deepEqual(rows, [
+    ["Date", "Description", "Amount"],
+    ["2026-02-03", "TESCO, SUPERSTORE", "-42.10"],
+  ]);
+});
+
+test("parseStatementCsv extracts outgoing transactions from common amount-based statements", () => {
+  const expenses = parseStatementCsv(
+    "Date,Description,Amount\n2026-02-03,TESCO STORES,-42.10\n2026-02-04,SALARY,2500\n2026-02-05,UBER,-14.22"
+  );
+
+  assert.deepEqual(expenses, [
+    {
+      name: "TESCO STORES",
+      category: "Food",
+      amount: 42.1,
+      date: "2026-02-03",
+      source: "statement",
+    },
+    {
+      name: "UBER",
+      category: "Transport",
+      amount: 14.22,
+      date: "2026-02-05",
+      source: "statement",
+    },
+  ]);
+});
+
+test("parseStatementCsv extracts debit-column statements", () => {
+  const expenses = parseStatementCsv(
+    "Posted Date,Details,Debit,Credit\n2026-02-03,Netflix,10.99,\n2026-02-04,Savings pot,,200"
+  );
+
+  assert.deepEqual(expenses, [
+    {
+      name: "Netflix",
+      category: "Entertainment",
+      amount: 10.99,
+      date: "2026-02-03",
+      source: "statement",
+    },
+  ]);
+});
+
+test("categorizeStatementExpense maps merchants to useful categories", () => {
+  assert.equal(categorizeStatementExpense("TESCO STORES 123"), "Food");
+  assert.equal(categorizeStatementExpense("UBER TRIP"), "Transport");
+  assert.equal(categorizeStatementExpense("Unknown Merchant"), "Other");
 });
 
 test("app boot starts logged out with no expenses when storage is empty", () => {
@@ -259,8 +334,8 @@ test("hydrate keeps valid saved data and session info", () => {
 
   assert.equal(app.state.budget, 900);
   assert.deepEqual(app.state.expenses, [
-    { name: "Bills", category: "Utilities", amount: 200 },
-    { name: "Travel", category: "Transport", amount: 120 },
+    { name: "Bills", category: "Utilities", amount: 200, date: "", source: "manual" },
+    { name: "Travel", category: "Transport", amount: 120, date: "", source: "manual" },
   ]);
   assert.equal(app.state.session.email, "saved@example.com");
   assert.match(nodes.ledgerCaption.textContent, /2 expense entries totalling £320/);
@@ -305,7 +380,9 @@ test("submitting expense trims name, rejects invalid rows, and resets form field
   nodes.expenseAmount.value = "4.5";
   nodes.expenseForm.submit();
 
-  assert.deepEqual(app.state.expenses, [{ name: "Coffee", category: "Food", amount: 4.5 }]);
+  assert.deepEqual(app.state.expenses, [
+    { name: "Coffee", category: "Food", amount: 4.5, date: "", source: "manual" },
+  ]);
   assert.equal(nodes.expenseName.value, "");
   assert.equal(nodes.expenseAmount.value, "");
   assert.equal(nodes.expenseCategory.value, "Housing");
@@ -376,6 +453,9 @@ test("index.html exposes login flow and app controls", () => {
     "budgetInput",
     "applyBudgetButton",
     "resetDataButton",
+    "statementForm",
+    "statementFile",
+    "statementStatus",
     "logoutButton",
     "userBadge",
     "expenseForm",
@@ -410,6 +490,7 @@ test("styles.css keeps animation and responsive layout rules", () => {
     ".hero",
     ".dashboard",
     ".stats-grid",
+    ".import-panel",
     "@keyframes rise-in",
     "@keyframes bar-grow",
   ].forEach((token) => {

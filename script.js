@@ -5,6 +5,15 @@ const currency = new Intl.NumberFormat("en-GB", {
 });
 
 const storageKey = "budget-lens-state";
+const categoryMatchers = [
+  { category: "Housing", patterns: ["rent", "mortgage", "landlord", "property", "lettings"] },
+  { category: "Food", patterns: ["tesco", "aldi", "lidl", "sainsbury", "asda", "co-op", "coop", "grocery", "grocer", "restaurant", "cafe", "coffee", "uber eats", "deliveroo", "just eat"] },
+  { category: "Entertainment", patterns: ["netflix", "spotify", "cinema", "steam", "playstation", "xbox", "apple.com/bill", "entertainment"] },
+  { category: "Transport", patterns: ["train", "tfl", "uber", "bolt", "shell", "esso", "petrol", "fuel", "station", "bus"] },
+  { category: "Utilities", patterns: ["electric", "water", "gas", "energy", "wifi", "internet", "broadband", "council tax", "utility"] },
+  { category: "Health", patterns: ["pharmacy", "dent", "doctor", "hospital", "gym", "fitness", "health"] },
+  { category: "Savings", patterns: ["savings", "isa", "investment", "vanguard", "fidelity", "monzo pot"] },
+];
 
 function createInitialState() {
   return {
@@ -15,6 +24,177 @@ function createInitialState() {
       isAuthenticated: false,
     },
   };
+}
+
+function normalizeHeader(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function detectDelimiter(line) {
+  const candidates = [",", ";", "\t"];
+  let best = ",";
+  let bestCount = -1;
+
+  candidates.forEach((candidate) => {
+    const count = line.split(candidate).length;
+    if (count > bestCount) {
+      best = candidate;
+      bestCount = count;
+    }
+  });
+
+  return best;
+}
+
+function parseCsvLine(line, delimiter) {
+  const cells = [];
+  let current = "";
+  let inQuotes = false;
+
+  for (let index = 0; index < line.length; index += 1) {
+    const character = line[index];
+    const nextCharacter = line[index + 1];
+
+    if (character === '"') {
+      if (inQuotes && nextCharacter === '"') {
+        current += '"';
+        index += 1;
+      } else {
+        inQuotes = !inQuotes;
+      }
+    } else if (character === delimiter && !inQuotes) {
+      cells.push(current.trim());
+      current = "";
+    } else {
+      current += character;
+    }
+  }
+
+  cells.push(current.trim());
+  return cells;
+}
+
+function parseCsv(text) {
+  const lines = String(text || "")
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .split("\n")
+    .filter((line) => line.trim());
+
+  if (!lines.length) {
+    return [];
+  }
+
+  const delimiter = detectDelimiter(lines[0]);
+  return lines.map((line) => parseCsvLine(line, delimiter));
+}
+
+function findColumnIndex(headers, aliases) {
+  return headers.findIndex((header) =>
+    aliases.some((alias) => header === alias || header.includes(alias))
+  );
+}
+
+function parseAmountValue(rawValue) {
+  if (rawValue == null) {
+    return NaN;
+  }
+
+  const value = String(rawValue).trim();
+  if (!value) {
+    return NaN;
+  }
+
+  const cleaned = value
+    .replace(/[£$,]/g, "")
+    .replace(/\s+/g, "")
+    .replace(/^\((.*)\)$/, "-$1");
+
+  return Number(cleaned);
+}
+
+function categorizeStatementExpense(description) {
+  const haystack = String(description || "").toLowerCase();
+
+  const match = categoryMatchers.find((entry) =>
+    entry.patterns.some((pattern) => haystack.includes(pattern))
+  );
+
+  return match ? match.category : "Other";
+}
+
+function buildStatementExpense(row, indexes, headers) {
+  const description =
+    row[indexes.description] ||
+    row[indexes.reference] ||
+    row[indexes.name] ||
+    "Imported transaction";
+  const date = row[indexes.date] || "";
+  const type = normalizeHeader(row[indexes.type] || "");
+
+  let amount = NaN;
+
+  if (indexes.debit !== -1) {
+    amount = Math.abs(parseAmountValue(row[indexes.debit]));
+  } else if (indexes.withdrawal !== -1) {
+    amount = Math.abs(parseAmountValue(row[indexes.withdrawal]));
+  } else if (indexes.amount !== -1) {
+    const rawAmount = parseAmountValue(row[indexes.amount]);
+    const amountHeader = headers[indexes.amount] || "";
+
+    if (Number.isFinite(rawAmount)) {
+      if (amountHeader.includes("debit") || amountHeader.includes("withdraw")) {
+        amount = Math.abs(rawAmount);
+      } else if (amountHeader.includes("credit") || amountHeader.includes("deposit")) {
+        amount = NaN;
+      } else if (type.includes("debit") || type.includes("card") || type.includes("purchase") || type.includes("out")) {
+        amount = Math.abs(rawAmount);
+      } else if (rawAmount < 0) {
+        amount = Math.abs(rawAmount);
+      }
+    }
+  }
+
+  if (!description.trim() || !Number.isFinite(amount) || amount <= 0) {
+    return null;
+  }
+
+  return {
+    name: description.trim(),
+    category: categorizeStatementExpense(description),
+    amount,
+    date: date.trim(),
+    source: "statement",
+  };
+}
+
+function parseStatementCsv(text) {
+  const rows = parseCsv(text);
+
+  if (rows.length < 2) {
+    return [];
+  }
+
+  const headers = rows[0].map(normalizeHeader);
+  const indexes = {
+    date: findColumnIndex(headers, ["date", "transaction date", "posted date", "booking date"]),
+    description: findColumnIndex(headers, ["description", "details", "payee", "transaction", "merchant", "narrative", "memo"]),
+    reference: findColumnIndex(headers, ["reference"]),
+    name: findColumnIndex(headers, ["name"]),
+    type: findColumnIndex(headers, ["type", "transaction type", "dr cr"]),
+    debit: findColumnIndex(headers, ["debit", "money out"]),
+    withdrawal: findColumnIndex(headers, ["withdrawal", "outflow"]),
+    amount: findColumnIndex(headers, ["amount", "value"]),
+  };
+
+  return rows
+    .slice(1)
+    .map((row) => buildStatementExpense(row, indexes, headers))
+    .filter(Boolean);
 }
 
 function buildTotals(state) {
@@ -60,6 +240,11 @@ function sanitizeState(rawState) {
             Number.isFinite(expense.amount) &&
             expense.amount > 0
         )
+          .map((expense) => ({
+            ...expense,
+            date: typeof expense.date === "string" ? expense.date : "",
+            source: typeof expense.source === "string" ? expense.source : "manual",
+          }))
       : [],
     session: {
       email: typeof rawState?.session?.email === "string" ? rawState.session.email : "",
@@ -236,7 +421,7 @@ function renderLedger(state, totals, elements) {
             <h3 class="expense-name">${expense.name}</h3>
             <strong class="expense-amount">${currency.format(expense.amount)}</strong>
           </div>
-          <p class="expense-meta">${expense.category}</p>
+          <p class="expense-meta">${expense.category}${expense.date ? ` · ${expense.date}` : ""}</p>
         </article>
       `
     )
@@ -271,6 +456,9 @@ function queryElements(documentRef) {
     budgetInput: documentRef.querySelector("#budgetInput"),
     applyBudgetButton: documentRef.querySelector("#applyBudgetButton"),
     resetDataButton: documentRef.querySelector("#resetDataButton"),
+    statementForm: documentRef.querySelector("#statementForm"),
+    statementFile: documentRef.querySelector("#statementFile"),
+    statementStatus: documentRef.querySelector("#statementStatus"),
     logoutButton: documentRef.querySelector("#logoutButton"),
     userBadge: documentRef.querySelector("#userBadge"),
     expenseForm: documentRef.querySelector("#expenseForm"),
@@ -323,6 +511,12 @@ function createApp(options = {}) {
     persistState(storage, state);
   }
 
+  function setStatementStatus(message) {
+    if (elements.statementStatus) {
+      elements.statementStatus.textContent = message;
+    }
+  }
+
   function setBudget() {
     const nextBudget = Number(elements.budgetInput.value);
     state.budget = Number.isFinite(nextBudget) && nextBudget >= 0 ? nextBudget : 0;
@@ -343,6 +537,8 @@ function createApp(options = {}) {
       name,
       category: elements.expenseCategory.value,
       amount,
+      date: "",
+      source: "manual",
     });
 
     elements.expenseForm.reset();
@@ -374,7 +570,48 @@ function createApp(options = {}) {
   function resetData() {
     state.budget = 2500;
     state.expenses = [];
+    setStatementStatus("Imported statement data cleared.");
     render();
+  }
+
+  async function readFileText(file) {
+    if (typeof file.text === "function") {
+      return file.text();
+    }
+
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ""));
+      reader.onerror = () => reject(new Error("Could not read the selected file."));
+      reader.readAsText(file);
+    });
+  }
+
+  async function importStatement(event) {
+    event.preventDefault();
+
+    const file = elements.statementFile?.files?.[0];
+    if (!file) {
+      setStatementStatus("Choose a CSV statement file first.");
+      return;
+    }
+
+    try {
+      const text = await readFileText(file);
+      const importedExpenses = parseStatementCsv(text);
+
+      if (!importedExpenses.length) {
+        setStatementStatus("No outgoing transactions were detected in that file.");
+        return;
+      }
+
+      state.expenses = [...importedExpenses, ...state.expenses];
+      elements.statementForm.reset();
+      setStatementStatus(`Imported ${importedExpenses.length} expenses from ${file.name}.`);
+      render();
+    } catch {
+      setStatementStatus("This statement could not be imported. Use a CSV export from your bank.");
+    }
   }
 
   function hydrateState() {
@@ -403,6 +640,7 @@ function createApp(options = {}) {
     elements.resetDataButton.addEventListener("click", resetData);
     elements.logoutButton.addEventListener("click", logout);
     elements.expenseForm.addEventListener("submit", addExpense);
+    elements.statementForm.addEventListener("submit", importStatement);
   }
 
   function init() {
@@ -416,6 +654,7 @@ function createApp(options = {}) {
     render,
     setBudget,
     addExpense,
+    importStatement,
     login,
     logout,
     resetData,
@@ -434,6 +673,9 @@ if (typeof module !== "undefined") {
     createApp,
     createInitialState,
     currency,
+    parseCsv,
+    parseStatementCsv,
+    categorizeStatementExpense,
     sanitizeState,
     storageKey,
   };

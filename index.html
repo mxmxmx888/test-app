@@ -125,6 +125,26 @@
             </form>
           </section>
 
+          <section class="panel import-panel">
+            <div class="section-heading">
+              <div>
+                <p class="eyebrow">Statement Import</p>
+                <h2>Upload last month&apos;s bank statement</h2>
+              </div>
+            </div>
+            <form id="statementForm" class="expense-form">
+              <label class="field">
+                <span>Statement file</span>
+                <input id="statementFile" type="file" accept=".csv,text/csv" required />
+              </label>
+              <button type="submit" class="primary-button">Import statement CSV</button>
+            </form>
+            <p class="budget-note">
+              Supports common bank CSV exports. Outgoing transactions are added as expenses automatically.
+            </p>
+            <p id="statementStatus" class="statement-status muted-text">No statement imported yet.</p>
+          </section>
+
           <section class="stats-grid" id="statsGrid"></section>
 
           <section class="panel chart-panel">
