@@ -705,6 +705,7 @@ function queryElements(documentRef) {
 function createApp(options = {}) {
   const documentRef = options.document ?? globalThis.document;
   const storage = options.storage ?? globalThis.localStorage ?? globalThis.window?.localStorage;
+  const windowRef = options.window ?? globalThis.window;
 
   if (!documentRef || !storage) {
     throw new Error("Budget Lens requires document and storage objects.");
@@ -712,17 +713,44 @@ function createApp(options = {}) {
 
   const elements = queryElements(documentRef);
   const state = createInitialState();
+  let lastAuthState = state.session.isAuthenticated;
+
+  function resetViewportToTop() {
+    if (documentRef?.documentElement) {
+      documentRef.documentElement.scrollTop = 0;
+    }
+
+    if (documentRef?.body) {
+      documentRef.body.scrollTop = 0;
+    }
+
+    if (typeof windowRef?.scrollTo === "function") {
+      windowRef.scrollTo(0, 0);
+    }
+  }
 
   function renderScreens() {
     const isAuthenticated = state.session.isAuthenticated;
     setVisible(elements.authScreen, !isAuthenticated);
     setVisible(elements.appScreen, isAuthenticated);
 
+    if (isAuthenticated !== lastAuthState) {
+      resetViewportToTop();
+
+      if (typeof windowRef?.requestAnimationFrame === "function") {
+        windowRef.requestAnimationFrame(() => {
+          resetViewportToTop();
+        });
+      }
+    }
+
     if (elements.userBadge) {
       elements.userBadge.textContent = isAuthenticated
         ? state.session.email || "Signed in"
         : "Signed out";
     }
+
+    lastAuthState = isAuthenticated;
   }
 
   function render() {

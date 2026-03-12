@@ -133,14 +133,14 @@
                   <h2>Upload last month&apos;s bank statement</h2>
                 </div>
               </div>
-              <form id="statementForm" class="expense-form">
-                <label class="field">
+              <form id="statementForm" class="expense-form statement-form">
+                <label class="field file-field">
                   <span>Statement file</span>
                   <input id="statementFile" type="file" accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required />
                 </label>
                 <button type="submit" class="primary-button">Import statement file</button>
               </form>
-              <p class="budget-note">
+              <p class="budget-note import-note">
                 Supports common bank CSV and Excel (`.xlsx`) exports. Outgoing transactions are added as expenses automatically.
               </p>
               <p id="statementStatus" class="statement-status muted-text">No statement imported yet.</p>
